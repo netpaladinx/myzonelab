@@ -1,0 +1,307 @@
+data:
+  train:
+    type: myzoneufc_detect
+    name: train_data
+    data_transforms:
+      - type: detect_transform.flip
+      - type: detect_transform.safe_random_warp
+        scale_factor: [0.667, 1.5]
+        translate_factor: 0.4
+      - type: agument_hsv
+        apply_prob: 0.5
+        h_gain: 0.02
+        s_gain: 0.6
+        v_gain: 0.4
+      - type: albumentations
+        disable_all_except:
+          [gaussian_blur, random_brightness_contrast, gauss_noise]
+        gaussian_blur_prob: 0.5
+        random_brightness_contrast_prob: 0.5
+        gauss_noise_prob: 0.5
+      - type: to_tensor
+      - type: detect_transform.generate_sparse_anchored_boxcls
+        anchor_thr: $data.data_params.anchor_thr
+      - type: collect
+        inputs: ['img']
+        targets:
+          [
+            'target_cxywh',
+            'target_cij',
+            'target_cls',
+            'target_anc_idx',
+            'target_anc',
+            'target_cnt',
+          ]
+        target_batching: concat
+    data_loader:
+      batch_size: 16 # 64
+      num_workers: 2
+      shuffle: true
+    data_params:
+      mode: train
+  val:
+    type: myzoneufc_detect
+    name: val_data
+    data_transforms:
+      - type: to_tensor
+      - type: detect_transform.generate_sparse_anchored_boxcls
+        anchor_thr: $data.data_params.anchor_thr
+      - type: collect
+        inputs: ['img']
+        targets:
+          [
+            'target_cxywh',
+            'target_cij',
+            'target_cls',
+            'target_anc_idx',
+            'target_anc',
+            'target_cnt',
+          ]
+        target_batching: concat
+    data_loader:
+      batch_size: 16
+      num_workers: 2
+  test:
+    type: myzoneufc_detect
+    name: test_data
+    data_transforms:
+      - type: to_tensor
+      - type: detect_transform.generate_sparse_anchored_boxcls
+        anchor_thr: $data.data_params.anchor_thr
+      - type: collect
+        inputs: ['img']
+        targets:
+          [
+            'target_cxywh',
+            'target_cij',
+            'target_cls',
+            'target_anc_idx',
+            'target_anc',
+            'target_cnt',
+          ]
+        target_batching: concat
+    data_loader:
+      batch_size: 16
+      num_workers: 2
+  data_params:
+    input_size: [640, 640]
+    input_channels: 3
+    strides: [8, 16, 32]
+    # anchors:
+    #   # max_wh_ratio: 1.92 for non-scale, 2.17 for safe-random-scale (0.5~5)
+    #   - [20, 20, 20, 40, 40, 20] # P3/8
+    #   - [40, 80, 80, 40, 80, 160] # P4/16
+    #   - [160, 80, 160, 320, 320, 320] # P5/32
+    # anchor_thr: 2.5
+    anchors:
+      - [10, 13, 16, 30, 33, 23] # P3/8
+      - [30, 61, 62, 45, 59, 119] # P4/16
+      - [116, 90, 156, 198, 373, 326] # P5/32
+    anchor_thr: 2.9
+
+model:
+  type: detect_model.yolov5_myzone_v3
+  backbone:
+    type: yolov5_backbone6
+    arch:
+      layer1: # 640 (hw) => 320 (stride = 2)
+        block: conv
+        n_channels: 64
+        kernel_size: 6
+        stride: 2
+        padding: 2
+      layer2: # 320 => 160 (stride = 4)
+        block: conv
+        n_channels: 128
+        kernel_size: 3
+        stride: 2
+      layer3: # 160 => 160
+        block: c3_bottleneck
+        n_inner_blocks: 3
+        n_channels: 128
+      layer4: # 160 => 80 (stride = 8)
+        block: conv
+        n_channels: 256
+        kernel_size: 3
+        stride: 2
+      layer5: # 80 => 80
+        block: c3_bottleneck
+        n_inner_blocks: 6
+        n_channels: 256
+      layer6: # 80 => 40 (stride = 16)
+        block: conv
+        n_channels: 512
+        kernel_size: 3
+        stride: 2
+      layer7: # 40 => 40
+        block: c3_bottleneck
+        n_inner_blocks: 9
+        n_channels: 512
+      layer8: # 40 => 20 (stride = 32)
+        block: conv
+        n_channels: 1024
+        kernel_size: 3
+        stride: 2
+      layer9: # 20 => 20
+        block: c3_bottleneck
+        n_inner_blocks: 3
+        n_channels: 1024
+      layer10: # 20 => 20
+        block: sppf
+        n_channels: 1024
+        kernel_size: 5
+    in_channels: $data.data_params.input_channels
+    depth_multiple: 0.33 # model depth multiple
+    width_multiple: 0.50 # layer channel multiple
+  head:
+    type: yolov5_head6_myzone_v3
+    arch:
+      layer1: # 20 (hw) => 20
+        block: conv
+        n_channels: 512
+        kernel_size: 1
+        stride: 1
+      layer2: # 20 => 40
+        block: upsample_layer.upsample
+        scale_factor: 2
+        mode: 'nearest'
+      layer3: # 40 => 40
+        block: concat
+        input_index: [-1, 6] # backbone layer 7's out
+        dim: 1
+      layer4: # 40 => 40
+        block: c3_bottleneck
+        n_inner_blocks: 3
+        n_channels: 512
+        shortcut: False
+      layer5: # 40 => 40
+        block: conv
+        n_channels: 256
+        kernel_size: 1
+        stride: 1
+      layer6: # 40 => 80
+        block: upsample_layer.upsample
+        scale_factor: 2
+        mode: 'nearest'
+      layer7: # 80 => 80
+        block: concat
+        input_index: [-1, 4] # backbone layer 5's out
+        dim: 1
+      layer8: # 80 => 80
+        block: c3_bottleneck
+        n_inner_blocks: 3
+        n_channels: 256
+        shortcut: False
+      layer9: # 80 => 40
+        block: conv
+        n_channels: 256
+        kernel_size: 3
+        stride: 2
+      layer10: # 40 => 40
+        block: concat
+        input_index: [-1, 14] # head layer 5's out
+        dim: 1
+      layer11: # 40 => 40
+        block: c3_bottleneck
+        n_inner_blocks: 3
+        n_channels: 512
+        shortcut: False
+      layer12: # 40 => 20
+        block: conv
+        n_channels: 512
+        kernel_size: 3
+        stride: 2
+      layer13: # 20 => 20
+        block: concat
+        input_index: [-1, 10] # head layer 1's out
+        dim: 1
+      layer14: # 20 => 20
+        block: c3_bottleneck
+        n_inner_blocks: 3
+        n_channels: 1024
+        shortcut: False
+      layer15:
+        block: yolov5_detect6_myzone_v3
+        input_index: [17, 20, 23] # head's layer 8, 11, 14 (stride: 8, 16, 32, size: 80, 40, 20)
+        anchors: $data.data_params.anchors
+        init_cfg:
+          input_size: $data.data_params.input_size
+    depth_multiple: 0.33 # model depth multiple
+    width_multiple: 0.50 # layer channel multiple
+  loss:
+    type: detect_loss.bbox_obj_cls_myzone_v2
+    obj_pos_weight: 100.
+    CIoU: true
+    layer_obj_weights: [1., 1., 1.]
+    bbox_loss_weight: 1.
+    obj_loss_weight: 1.
+    cxy_margin: 0.01
+    anchor_thr: $data.data_params.anchor_thr
+    wh_margin: 0.
+    wh_gamma: 2
+    obj_neg_smoothing: 0.01
+    none_pos_smoothing: 0.9
+  predict:
+    type: detect_postprocessor.predict_myzone_v3
+    anchors: $data.data_params.anchors
+    conf_thr: 0.01
+    iou_thr: 0.6
+    cxy_margin: $model.loss.cxy_margin
+    anchor_thr: $data.data_params.anchor_thr
+    wh_margin: $model.loss.wh_margin
+    wh_gamma: $model.loss.wh_gamma
+
+# optim:
+#   max_epochs: 300
+#   optimizer:
+#     type: sgd
+#     lr: 0.003
+#     weight_decay: 0.0003 # not for bias and batchnorm
+#     momentum: 0.8
+#     nesterov: true
+#     ext_param_groups: [decay_weight, bias]
+#   lr_scheduler:
+#     type: cosine_anneal_lr
+#     min_lr_ratio: 0.1
+#     warmup: linear
+#     warmup_ratio: [0.0, 0.0, 10]
+#     warmup_epochs: 2
+#     min_warmup_steps: 1000
+#   momentum_scheduler:
+#     type: fixed_momentum
+#     warmup: linear
+#     warmup_ratio: 0.5
+#     warmup_epochs: 2
+#     min_warmup_steps: 1000
+#   optim_scheduler:
+#     type: optim
+
+optim:
+  max_epochs: 300
+  optimizer:
+    type: adam
+    lr: 0.001
+  lr_scheduler:
+    type: step_lr
+    step: [150, 200, 250]
+    warmup: linear
+    warmup_ratio: 0.001
+    warmup_steps: 500
+  optim_scheduler:
+    type: optim
+
+saver:
+  interval: 1
+  max_keep_ckpts: 5
+validator:
+  val_at_start: true
+summarizer:
+  interval: 10
+diagnoser:
+  at_train_epochs: [1, 10, 20, 50, 90, 100, 150, 200, 250, 290]
+  at_train_steps: [1, 10]
+  at_val_epochs: [1, 10, 20, 50, 90, 100, 150, 200, 250, 290]
+  at_val_steps: [1, 2, 3, 4, 5, 6, 7]
+  before_run: [detect.update_model_config]
+  before_step: [detect.plot_inputs]
+  after_step: [detect.plot_preds]

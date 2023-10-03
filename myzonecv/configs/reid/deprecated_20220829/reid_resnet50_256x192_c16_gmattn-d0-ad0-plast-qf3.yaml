@@ -1,0 +1,192 @@
+data:
+  # train
+  train:
+    type: myzoneufc_reid
+    name: train_data
+    data_transforms:
+      - type: adaptive_adjust_color
+      - type: reid_transform.batch_random_warp
+        translate_prob: 0.5
+        scale_prob: 0.5
+        scale_sigma: 0.5
+        rotate_factor: 10
+      - type: to_tensor
+      - type: normalize
+      - type: reid_transform.generate_cls_target
+      - type: reid_transform.generate_ml_masks
+      - type: collect
+        shared: [flip_pairs, mask_pos, mask_neg, mask_tri, size_params]
+        inputs: [img]
+        targets: [cls_target]
+    data_loader:
+      num_workers: 2
+    data_params:
+      mode: train
+      n_samples_per_id: 8
+      min_ids_per_batch: 8
+      batch_size: 64
+      n_classes: 16
+  # validation
+  val:
+    type: myzoneufc_reid
+    name: val_data
+    data_transforms:
+      - type: adaptive_adjust_color
+      - type: reid_transform.batch_warp
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: [img]
+    data_loader:
+      num_workers: 0
+      batch_size: 8
+  # validation on transfer
+  val_transfer:
+    type: myzoneufc_reid
+    name: val_data
+    data_transforms:
+      - type: adaptive_adjust_color
+      - type: reid_transform.batch_warp
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: [img]
+    data_loader:
+      num_workers: 0
+      batch_size: 8
+  # test
+  test:
+    type: myzoneufc_reid
+    name: test_data
+    data_transforms:
+      - type: adaptive_adjust_color
+      - type: reid_transform.batch_warp
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: [img]
+    data_loader:
+      num_workers: 0
+      batch_size: 8
+  # common
+  data_params:
+    input_size: [192, 256] # w,h
+    input_channels: 3
+
+model:
+  type: reid_model.topdown
+  backbone:
+    type: resnets16
+    depth: 50
+    in_channels: $data.data_params.input_channels
+  head:
+    type: reid_head
+    out_channels: 128
+    final_channels: null
+    global_extractor:
+      - type: global_multiple_attention_extractor
+        abbr: gmattn
+        depth: 0
+        attn_depth: 0
+        pool_first: false
+        quantile_factors: [0, 0.75, 0.9375]
+    local_extractor: null
+    final_aggregator:
+      type: final_concat_aggregator
+      abbr: fcat
+  recon_head:
+    type: reid_recon_head
+    output_size: [256, 192] # h,w
+  loss:
+    type: reid_loss
+    apply_final_loss: false
+    cls_loss:
+      type: classification
+      n_classes: $data.train.data_params.n_classes
+      radial_min: 0.6
+      radial_max: 1.0
+      radial_p: 2
+      enable_temperature: true
+      label_smoothing: 0.2
+    ml_loss:
+      type: metriclearning
+      p: 2
+      margin_pos: 0.4
+      margin_neg: 0.8
+      margin_tri: 0.4
+      tri_weight: 0.2
+  recon_loss:
+    type: reid_recon_loss
+  accuracy:
+    type: reid_postprocessor.accuracy
+    distance: l2
+  predict:
+    type: reid_postprocessor.predict
+  eval_cfg:
+    return_all_features: true
+
+complex_train:
+  stations:
+    # station 1
+    - name: train_st
+      threads:
+        - name: train_th
+          data: train
+          start_outer_round: 1
+          max_inner_steps: 500
+          max_steps: 5000
+          global_vars: [step]
+          terminate_inner_loop_when_closed: true
+          will_terminate_outer_loop_when_finished: true
+          optim:
+            module: [backbone, head, loss]
+            optimizer:
+              type: adam
+              lr: 0.0005
+            lr_scheduler:
+              type: step_lr
+              by_epoch: false
+              step: [3000, 4000, 4500]
+              gamma: 0.3
+              warmup: linear
+              warmup_ratio: 0.01
+              warmup_steps: 200
+            optim_scheduler:
+              type: optim
+          summarize:
+            interval: 50
+          save:
+            by_epoch: false
+            interval: 500
+            max_keep_ckpts: -1
+    # station 2
+    - name: validate_st
+      threads:
+        - name: validate_th
+          mode: val
+          data: val
+          max_inner_epochs: 1
+          progressbar_unit: item
+          val_step_kwargs:
+            return_recon: true
+          validate:
+            save_best_by: output_map
+            metric_greater_better: true
+            save_prefix: val_
+    # station 3
+    - name: validate_transfer_st
+      threads:
+        - name: validate_transfer_th
+          mode: val
+          data: val_transfer
+          max_inner_epochs: 1
+          progressbar_unit: item
+          val_step_kwargs:
+            return_recon: true
+          validate:
+            save_best_by: output_map
+            metric_greater_better: true
+            save_prefix: val_transfer_

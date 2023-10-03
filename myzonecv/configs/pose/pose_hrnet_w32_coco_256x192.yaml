@@ -1,0 +1,189 @@
+data:
+  train:
+    type: coco_pose
+    name: train_data
+    data_transforms:
+      - type: pose_transform.flip
+        apply_prob: 0.25
+      - type: pose_transform.lazy_translate
+        apply_prob: 0.75
+        translate_factor: 0.1
+      - type: pose_transform.lazy_scale
+        apply_prob: 0.75
+        scale_factor: 0.2
+      - type: pose_transform.lazy_rotate
+        apply_prob: 0.75
+        rotate_factor: 20
+      - type: pose_transform.warp
+      - type: albumentations
+      - type: agument_hsv
+        h_gain: 0.0138
+        s_gain: 0.664
+        v_gain: 0.464
+      - type: to_tensor
+      - type: normalize
+      - type: pose_transform.generate_heatmaps
+      - type: collect
+        shared: flip_pairs
+        inputs: ['img', 'mask']
+        targets: ['target_heatmaps', 'target_weights']
+    data_loader:
+      batch_size: 16
+      num_workers: 2
+      shuffle: true
+    data_params:
+      shuffle: true
+  val:
+    type: coco_pose
+    name: val_data
+    data_transforms:
+      - type: pose_transform.warp
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: ['img', 'mask']
+    data_loader:
+      batch_size: 16
+      num_workers: 2
+  test:
+    type: coco_pose
+    name: test_data
+    data_transforms:
+      - type: pose_transform.warp
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: ['img', 'mask']
+    data_loader:
+      batch_size: 4
+      num_workers: 2
+  test_stable:
+    type: coco_pose
+    name: test_data
+    data_transforms:
+      - type: pose_transform.eval_stable
+      - type: pose_transform.warp_many
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: ['img', 'mask']
+        arrays: ['center', 'scale']
+        input_batching: concat
+        array_batching: concat
+    data_loader:
+      batch_size: 1
+      num_workers: 1
+  infer:
+    type: coco_pose
+    name: infer_data
+    data_transforms:
+      - type: pose_transform.warp
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: ['img', 'mask']
+    data_loader:
+      batch_size: 4
+      num_workers: 2
+  infer_stream:
+    type: coco_pose_jit
+    name: infer_stream_data
+    data_transforms:
+      - type: pose_transform.warp
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: ['img', 'mask']
+  data_params:
+    input_size: [192, 256] # w,h
+    input_channels: 3
+    heatmap_size: [48, 64]
+    use_keypoint_weights: false
+
+model:
+  type: pose_model.topdown
+  backbone:
+    type: hrnet
+    arch:
+      stage1:
+        n_layers: 1
+        n_branches: 1
+        block: resnet_bottleneck
+        n_blocks: [4]
+        n_channels: [64]
+      stage2:
+        n_layers: 1
+        n_branches: 2
+        block: resnet_basicblock
+        n_blocks: [4, 4]
+        n_channels: [32, 64]
+      stage3:
+        n_layers: 4
+        n_branches: 3
+        block: resnet_basicblock
+        n_blocks: [4, 4, 4]
+        n_channels: [32, 64, 128]
+      stage4:
+        n_layers: 3
+        n_branches: 4
+        block: resnet_basicblock
+        n_blocks: [4, 4, 4, 4]
+        n_channels: [32, 64, 128, 256]
+    in_channels: $data.data_params.input_channels
+  keypoint_head:
+    type: pose_keypoint
+    in_channels: 32
+    out_channels: 17
+    n_deconvs: 0
+    deconv_filters: []
+    deconv_kernels: []
+    n_convs: 0
+    conv_filters: []
+    conv_kernels: []
+    final_conv_kernel: 1
+  loss:
+    type: pose_loss.mse
+    use_target_weights: true
+    dist_aware: false
+    dist_gamma: 0.1
+  accuracy:
+    type: pose_postprocessor.accuracy
+  predict:
+    type: pose_postprocessor.predict
+  eval_cfg:
+    flip_test: false
+    postprocess: default
+    modulate_kernel: 11
+    shift_heatmap: true
+  infer_cfg:
+    flip_test: false
+    postprocess: default
+
+optim:
+  max_epochs: 210
+  optimizer:
+    type: adam
+    lr: 0.0005
+  lr_scheduler:
+    type: step_lr
+    step: [170, 200]
+    warmup: linear
+    warmup_ratio: 0.001
+    warmup_steps: 500
+  optim_scheduler:
+    type: optim
+
+saver:
+  interval: 1
+  max_keep_ckpts: 5
+validator:
+  val_at_start: true
+summarizer:
+  interval: 50
+diagnoser:
+  output_input_imgs: true

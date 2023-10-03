@@ -1,0 +1,123 @@
+#!/usr/bin/env python
+import os.path as osp
+import argparse
+import json
+
+from myzonecv.apis import train, get_config_file, Config, utils as U
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default=None)
+    parser.add_argument('--runner', type=str, default='train')
+    parser.add_argument('--extra-conf-path', type=str, default=None, help="extra config filepath")
+    parser.add_argument('--extra-conf-str', type=str, default=None, help="extra config jsonstr")
+    parser.add_argument('--extra2-conf-str', type=str, default=None, help="extra config jsonstr (for the debug purpose)")
+    parser.add_argument('--work-dir', type=str, default=None)
+    parser.add_argument('--timestamp', type=str, default=None)
+    parser.add_argument('--ann-file', type=str, required=True)
+    parser.add_argument('--img-dir', type=str, required=True)
+    parser.add_argument('--val-ann-file', type=str, default=None)
+    parser.add_argument('--val-img-dir', type=str, default=None)
+    parser.add_argument('--extra-data-key', type=str, default=None)
+    parser.add_argument('--extra-ann-file', type=str, default=None)
+    parser.add_argument('--extra-img-dir', type=str, default=None)
+    parser.add_argument('--extra2-data-key', type=str, default=None)
+    parser.add_argument('--extra2-ann-file', type=str, default=None)
+    parser.add_argument('--extra2-img-dir', type=str, default=None)
+    parser.add_argument('--split-train-val', action='store_true')
+    parser.add_argument('--split-ratio', type=float, default=9)
+    parser.add_argument('--pretrained', type=str, default=None)
+    parser.add_argument('--pretrained-src-prefix', type=str, default=None)
+    parser.add_argument('--pretrained-dst-prefix', type=str, default=None)
+    parser.add_argument('--use-diagnosis', action='store_true')
+    args = parser.parse_args()
+
+    config = get_config_file(args.config)
+    kwargs = {'work_dir': args.work_dir, 'timestamp': args.timestamp}
+
+    path = args.extra_conf_path
+    if path and osp.isfile(path):
+        extra_config = Config.from_file(path)
+        kwargs.update(extra_config.to_dict())
+
+    jsonstr = args.extra_conf_str
+    if jsonstr:
+        try:
+            kwargs.update(json.loads(jsonstr))
+        except Exception as e:
+            print('\033[1m\x1b[31m!!!JSON Parsing Error on extra-conf-str: ' + str(e) + '\x1b[0m')
+            raise e
+
+    jsonstr2 = args.extra2_conf_str
+    if jsonstr2:
+        try:
+            kwargs.update(json.loads(jsonstr2))
+        except Exception as e:
+            print('\033[1m\x1b[31m!!!JSON Parsing Error on extra2-conf-str: ' + str(e) + '\x1b[0m')
+            raise e
+
+    ann_file = U.parse_path(args.ann_file, is_file=True)
+    img_dir = U.parse_path(args.img_dir, is_dir=True)
+    if args.split_train_val:
+        assert args.split_ratio > 0
+        kwargs['data'] = {
+            'data_source': {
+                'ann_file': ann_file,
+                'img_dir': img_dir,
+                'drop_prob': 1. / args.split_ratio
+            }
+        }
+    else:
+        assert args.val_ann_file is not None and args.val_img_dir is not None
+        val_ann_file = U.parse_path(args.val_ann_file, is_file=True)
+        val_img_dir = U.parse_path(args.val_img_dir, is_dir=True)
+        kwargs['data'] = {
+            'train.data_source': {
+                'ann_file': ann_file,
+                'img_dir': img_dir
+            },
+            'val.data_source': {
+                'ann_file': val_ann_file,
+                'img_dir': val_img_dir
+            }
+        }
+
+    if args.extra_data_key is not None:
+        if args.extra_ann_file is not None and args.extra_img_dir is not None:
+            extra_ann_file = U.parse_path(args.extra_ann_file, is_file=True)
+            extra_img_dir = U.parse_path(args.extra_img_dir, is_dir=True)
+            kwargs[f'data.{args.extra_data_key}'] = {
+                'data_source': {
+                    'ann_file': extra_ann_file,
+                    'img_dir': extra_img_dir
+                }
+            }
+
+    if args.extra2_data_key is not None:
+        if args.extra2_ann_file is not None and args.extra2_img_dir is not None:
+            extra2_ann_file = U.parse_path(args.extra2_ann_file, is_file=True)
+            extra2_img_dir = U.parse_path(args.extra2_img_dir, is_dir=True)
+            kwargs[f'data.{args.extra2_data_key}'] = {
+                'data_source': {
+                    'ann_file': extra2_ann_file,
+                    'img_dir': extra2_img_dir
+                }
+            }
+
+    if args.pretrained:
+        assert osp.exists(args.pretrained) and osp.isfile(args.pretrained)
+        kwargs['model.init_cfg'] = {
+            'type': 'pretrained',
+            'path': args.pretrained,
+            'src_prefix': args.pretrained_src_prefix,
+            'dst_prefix': args.pretrained_dst_prefix
+        }
+
+    kwargs['use_diagnosis'] = args.use_diagnosis
+
+    train(config, runner=args.runner, **kwargs)
+
+
+if __name__ == '__main__':
+    main()

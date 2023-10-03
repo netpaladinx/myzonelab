@@ -1,0 +1,75 @@
+#!/usr/bin/env python
+import os.path as osp
+import argparse
+import json
+
+from myzonecv.apis import get_config_file, infer, Config, utils as U
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--video-path', type=str, default=None)
+    parser.add_argument('--extra-conf-path', type=str, default=None, help="extra config filepath")
+    parser.add_argument('--extra-conf-str', type=str, default=None, help="extra config jsonstr")
+    parser.add_argument('--work-dir', type=str, default=None)
+    parser.add_argument('--timestamp', type=str, default=None)
+    parser.add_argument('--detect-config', type=str, default=None)
+    parser.add_argument('--detect-checkpoint', type=str, default=None)
+    parser.add_argument('--detect-init-type', type=str, default='checkpoint')
+    parser.add_argument('--pose-config', type=str, default=None)
+    parser.add_argument('--pose-checkpoint', type=str, default=None)
+    parser.add_argument('--pose-init-type', type=str, default='checkpoint')
+    parser.add_argument('--sink-id', type=int, default=0)
+    parser.add_argument('--infer-pose', action='store_true')
+    parser.add_argument('--eval-smoothness', action='store_true')
+    parser.add_argument('--eval-confidence', action='store_true')
+    parser.add_argument('--display', action='store_true')
+    parser.add_argument('--use-camera', action='store_true')
+    parser.add_argument('--verbose', action='store_true')
+    args = parser.parse_args()
+
+    if args.detect_config is not None:
+        args.detect_config = get_config_file(args.detect_config)
+
+    if not args.infer_pose:
+        args.pose_config = None
+    if args.pose_config is not None:
+        args.pose_config = get_config_file(args.pose_config)
+
+    if args.use_camera:
+        source = 0
+    else:
+        source = U.parse_path(args.video_path, is_file=True)[0]
+
+    assert osp.isfile(args.detect_checkpoint)
+    kwargs = {
+        'work_dir': args.work_dir,
+        'timestamp': args.timestamp,
+        'display': args.display,
+        'use_camera': args.use_camera,
+        'sink_id': args.sink_id,
+        'detect.data.infer.data_source': source,
+        'detect.data.infer.data_eval': {'eval_smoothness': args.eval_smoothness, 'eval_confidence': args.eval_confidence},
+        'detect.model.init_cfg': {'type': args.detect_init_type, 'path': args.detect_checkpoint},
+        'pose.model.init_cfg': {'type': args.pose_init_type, 'path': args.pose_checkpoint},
+        'verbose': args.verbose
+    }
+
+    path = args.extra_conf_path
+    if path and osp.isfile(path):
+        extra_config = Config.from_file(path)
+        kwargs.update(extra_config.to_dict())
+
+    jsonstr = args.extra_conf_str
+    if jsonstr:
+        try:
+            kwargs.update(json.loads(jsonstr))
+        except Exception as e:
+            print(e)
+            pass
+
+    infer(args.detect_config, args.pose_config, **kwargs)
+
+
+if __name__ == '__main__':
+    main()

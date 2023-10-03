@@ -1,0 +1,143 @@
+data:
+  train:
+    type: myzoneufc_reid
+    name: train_data
+    data_transforms:
+      - type: adaptive_adjust_color
+      - type: reid_transform.batch_random_warp
+        translate_prob: 0.5
+        scale_prob: 0.5
+        scale_sigma: 0.5
+        rotate_factor: 10
+      - type: to_tensor
+      - type: normalize
+      - type: reid_transform.generate_cls_target
+      - type: reid_transform.generate_ml_masks
+      - type: collect
+        shared: [flip_pairs, mask_pos, mask_neg, mask_tri, size_params]
+        inputs: ['img']
+        targets: ['cls_target']
+    data_loader:
+      num_workers: 2
+    data_params:
+      mode: train
+      n_samples_per_id: 8
+      min_ids_per_batch: 8
+      batch_size: 64
+      n_classes: 26
+  val:
+    type: myzoneufc_reid
+    name: val_data
+    data_transforms:
+      - type: adaptive_adjust_color
+      - type: reid_transform.batch_warp
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: ['img']
+    data_loader:
+      num_workers: 2
+      batch_size: 8
+  test:
+    type: myzoneufc_reid
+    name: test_data
+    data_transforms:
+      - type: adaptive_adjust_color
+      - type: reid_transform.batch_warp
+      - type: to_tensor
+      - type: normalize
+      - type: collect
+        shared: flip_pairs
+        inputs: ['img']
+    data_loader:
+      num_workers: 2
+      batch_size: 8
+  data_params:
+    input_size: [192, 256] # w,h
+    input_channels: 3
+    featuremap_size: [48, 64]
+    featuremap_channels: 256
+
+model:
+  type: reid_model.topdown
+  backbone:
+    type: resnets16
+    depth: 50
+    in_channels: $data.data_params.input_channels
+  head:
+    type: reid_head
+    in_channels: 2048
+    out_channels: 128
+    final_channels: null
+    global_extractor:
+      type: global_average_extractor
+      abbr: gavg
+      enc_cfg:
+        acti_cfg: null
+    local_extractor: null
+    final_aggregator:
+      type: final_concat_aggregator
+      abbr: fcat
+  loss:
+    type: reid_loss
+    apply_final_loss: false
+    cls_loss:
+      type: classification
+      n_classes: $data.train.data_params.n_classes
+    ml_loss:
+      type: metriclearning
+      p: 1
+      margin_pos: 0.2
+      margin_neg: 1.5
+      margin_tri: 1.3
+  accuracy:
+    type: reid_postprocessor.accuracy
+    distance: l2
+  predict:
+    type: reid_postprocessor.predict
+  eval_cfg:
+    return_all_features: true
+
+complex_train:
+  stations:
+    - name: train_st
+      threads:
+        - name: train_th
+          data: train
+          start_outer_round: 1
+          max_inner_steps: 2000
+          max_steps: 50000
+          global_vars: ['step']
+          will_terminate_outer_loop_when_finished: true
+          optim:
+            module: null
+            optimizer:
+              type: adam
+              lr: 0.0005
+            lr_scheduler:
+              type: step_lr
+              by_epoch: false
+              step: [30000, 40000, 45000]
+              gamma: 0.3
+              warmup: linear
+              warmup_ratio: 0.01
+              warmup_steps: 1000
+            optim_scheduler:
+              type: optim
+          summarize:
+            interval: 50
+          save:
+            by_epoch: false
+            interval: 2000
+            max_keep_ckpts: 5
+    - name: validate_st
+      threads:
+        - name: validate_th
+          mode: val
+          data: val
+          max_inner_epochs: 1
+          progressbar_unit: item
+          validate:
+            save_best_by: output_map
+            metric_greater_better: true

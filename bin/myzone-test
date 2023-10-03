@@ -1,0 +1,86 @@
+#!/usr/bin/env python
+import os.path as osp
+import argparse
+import json
+
+from myzonecv.apis import test, get_config_file, Config, utils as U
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--test-type', type=str, default=None)
+    parser.add_argument('--config', type=str, default=None)
+    parser.add_argument('--extra-conf-path', type=str, default=None, help="extra config filepath")
+    parser.add_argument('--extra-conf-str', type=str, default=None, help="extra config jsonstr")
+    parser.add_argument('--work-dir', type=str, default=None)
+    parser.add_argument('--timestamp', type=str, default=None)
+    parser.add_argument('--summary-name', type=str, default=None)
+    parser.add_argument('--plot-name', type=str, default=None)
+    parser.add_argument('--analysis-name', type=str, default=None)
+    parser.add_argument('--visualize-name', type=str, default=None)
+    parser.add_argument('--eval-hard-level', type=int, default=0)
+    parser.add_argument('--ann-file', type=str, default=None)
+    parser.add_argument('--img-dir', type=str, default=None)
+    parser.add_argument('--checkpoint', type=str, default=None)
+    parser.add_argument('--checkpoint-type', type=str, default='checkpoint')
+    parser.add_argument('--batch-size', type=int, default=None)
+    parser.add_argument('--num-workers', type=int, default=None)
+    args = parser.parse_args()
+
+    config = get_config_file(args.config)
+
+    summary_path = None
+    plot_dir = None
+    analysis_dir = None
+    visualize_dir = None
+    if args.work_dir:
+        if args.summary_name:
+            summary_path = osp.join(args.work_dir, f'{args.summary_name}.json')
+        if args.plot_name:
+            plot_dir = osp.join(args.work_dir, f'{args.plot_name}')
+        if args.analysis_name:
+            analysis_dir = osp.join(args.work_dir, f'{args.analysis_name}')
+        if args.visualize_name:
+            visualize_dir = osp.join(args.work_dir, f'{args.visualize_name}')
+
+    ann_file = U.parse_path(args.ann_file, is_file=True)
+    img_dir = U.parse_path(args.img_dir, is_dir=True)
+
+    test_type = args.test_type or 'test'
+    assert osp.isfile(args.checkpoint), f'Invalid checkpoint: {args.checkpoint}'
+    kwargs = {
+        'test_type': args.test_type,
+        'work_dir': args.work_dir,
+        'timestamp': args.timestamp,
+        'summary_path': summary_path,
+        'plot_dir': plot_dir,
+        'analysis_dir': analysis_dir,
+        'visualize_dir': visualize_dir,
+        'eval_hard_level': args.eval_hard_level,
+        f'data.{test_type}.data_source': {'ann_file': ann_file, 'img_dir': img_dir},
+        'model.init_cfg': {'type': args.checkpoint_type, 'path': args.checkpoint}
+    }
+
+    if args.batch_size:
+        kwargs[f'data.{test_type}.data_loader.batch_size'] = args.batch_size
+    if args.num_workers:
+        kwargs[f'data.{test_type}.data_loader.num_workers'] = args.num_workers
+
+    path = args.extra_conf_path
+    if path and osp.isfile(path):
+        extra_config = Config.from_file(path)
+        kwargs.update(extra_config.to_dict())
+
+    jsonstr = args.extra_conf_str
+    if jsonstr:
+        try:
+            kwargs.update(json.loads(jsonstr))
+        except Exception as e:
+            print(e)
+            pass
+
+    test(config, **kwargs)
+
+
+if __name__ == '__main__':
+    main()
